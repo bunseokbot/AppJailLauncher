@@ -1,6 +1,7 @@
 // AppJailLauncher.cpp : Defines the entry point for the console application.
 
 #include "stdafx.h"
+#include "strsafe.h"
 #include "common.h"
 #include "utils.h"
 
@@ -38,6 +39,33 @@ typedef struct _CMD_OPTIONS
 
 BOOL g_keepListening = TRUE;
 WSAEVENT g_hQuitListenEvent = WSA_INVALID_EVENT;
+
+VOID WriteLog(char* logFlag, _TCHAR* logMessage) {
+	HANDLE hFile;
+	DWORD dwWrite;
+	_TCHAR message[1024];
+	_TCHAR unicodeFlag[40] = { 0, };
+
+	SYSTEMTIME localTime;
+	GetLocalTime(&localTime);
+	MultiByteToWideChar(CP_ACP, MB_PRECOMPOSED, logFlag, strlen(logFlag), unicodeFlag, strlen(logFlag));
+	_stprintf_s(
+		message,
+		sizeof(message),
+		_T("[%d-%02d-%02d %02d:%02d:%02d|%s] %s\r\n"),
+		localTime.wYear, localTime.wMonth, localTime.wDay, localTime.wHour, localTime.wMinute, localTime.wSecond, unicodeFlag, logMessage
+	);
+	
+	hFile = CreateFile(_T("launcher.log"), FILE_APPEND_DATA, FILE_SHARE_WRITE, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hFile == INVALID_HANDLE_VALUE)
+		return;
+
+	char charMessage[sizeof(message)] = { 0, };
+	WideCharToMultiByte(CP_ACP, 0, message, sizeof(message), charMessage, sizeof(charMessage), NULL, NULL);
+	
+	WriteFile(hFile, charMessage, strlen(charMessage), &dwWrite, NULL);
+	CloseHandle(hFile);
+}
 
 BOOL FileExists(LPTSTR pszFilePath)
 {
@@ -414,6 +442,7 @@ int Do_LaunchServer(
 				);
 			if (clientSocket != INVALID_SOCKET) {
 				RtlZeroMemory(clientIpAddr, sizeof(clientIpAddr));
+				// client connection successful!
 				PRINT(
 					"  Client connection from %s accepted.\n",
 					InetNtop(
@@ -423,6 +452,9 @@ int Do_LaunchServer(
 					sizeof(clientIpAddr)
 					)
 					);
+
+				// write client access log
+				WriteLog("ACCESS", clientIpAddr);
 
 				if (SUCCEEDED(CreateClientSocketWorker(
 					clientSocket,
@@ -437,6 +469,7 @@ int Do_LaunchServer(
 				}
 				else {
 					LOG("  Failed to launch jailed process.\n");
+					WriteLog("ERROR", _T("Failed to launch jailed process."));
 				}
 
 				closesocket(clientSocket);
@@ -447,11 +480,13 @@ int Do_LaunchServer(
 					clientSocket,
 					WSAGetLastError()
 					);
+				WriteLog("ERROR", _T("Bad client request"));
 			}
 		}
 		else if (dwReturnCode == WSA_WAIT_EVENT_0 + 1) {
 			LOG("g_hQuitListenEvent is set. Exiting.\n");
 			PRINT("Ctrl-C event detected. Exiting...\n");
+			WriteLog("ALERT", _T("Terminating launcher"));
 			break;
 		}
 		else {
@@ -462,6 +497,7 @@ int Do_LaunchServer(
 			//    * WSA_WAIT_TIMEOUT - This happens when the time-out interval has elapsed. However,
 			//                         our interval is INFINITE.
 			LOG("Unexpected value: dwReturnCode=%08x\n", dwReturnCode);
+			WriteLog("CRITICAL", _T("Unexpected launcher error"));
 		}
 	}
 
